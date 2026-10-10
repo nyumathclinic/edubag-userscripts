@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gradescope Rubric Import/Export
 // @namespace    https://github.com/nyumathclinic/gradescope-tampermonkey
-// @version      0.5.0
+// @version      0.5.1
 // @description  Import a question's rubric (items, groups, settings) from a JSON file, and export it back out.
 // @author       Matthew Leingang
 // @match        https://www.gradescope.com/courses/*/questions/*/submissions/*/grade
@@ -419,17 +419,21 @@
   }
 
   function openImportDialog(question) {
-    const dialog = document.createElement('dialog');
-    dialog.style.cssText = 'max-width:520px;width:90vw;padding:16px;border:1px solid #999;border-radius:6px;font:14px/1.4 sans-serif';
-    dialog.innerHTML = `
-      <h3 style="margin:0 0 12px"></h3>
-      <input type="file" accept=".json,application/json">
-      <pre data-role="status" style="white-space:pre-wrap;max-height:260px;overflow:auto;margin:12px 0;font-size:12px"></pre>
-      <label style="display:block;margin-bottom:12px"><input type="checkbox" data-role="replace"> Replace existing rubric</label>
-      <div style="text-align:right">
-        <button type="button" data-role="cancel">Close</button>
-        <button type="button" data-role="import" disabled>Import</button>
-      </div>`;
+    // In a shadow root so Gradescope's stylesheet, which hides native
+    // checkboxes, does not reach the dialog's controls.
+    const host = document.createElement('div');
+    host.attachShadow({ mode: 'open' }).innerHTML = `
+      <dialog style="max-width:520px;width:90vw;padding:16px;border:1px solid #999;border-radius:6px;font:14px/1.4 sans-serif">
+        <h3 style="margin:0 0 12px"></h3>
+        <input type="file" accept=".json,application/json">
+        <pre data-role="status" style="white-space:pre-wrap;max-height:260px;overflow:auto;margin:12px 0;font-size:12px"></pre>
+        <label style="display:block;margin-bottom:12px"><input type="checkbox" data-role="replace"> Replace existing rubric</label>
+        <div style="text-align:right">
+          <button type="button" data-role="cancel">Close</button>
+          <button type="button" data-role="import" disabled>Import</button>
+        </div>
+      </dialog>`;
+    const dialog = host.shadowRoot.querySelector('dialog');
     dialog.querySelector('h3').textContent = `Import rubric into question ${questionLabel(question)}`;
     const fileInput = dialog.querySelector('input[type=file]');
     const status = dialog.querySelector('[data-role=status]');
@@ -507,8 +511,8 @@
     });
 
     dialog.querySelector('[data-role=cancel]').addEventListener('click', () => dialog.close());
-    dialog.addEventListener('close', () => dialog.remove());
-    document.body.append(dialog);
+    dialog.addEventListener('close', () => host.remove());
+    document.body.append(host);
     dialog.showModal();
   }
 
