@@ -1,0 +1,21 @@
+{
+  "scoring_type": "negative",
+  "floor": true,
+  "ceiling": true,
+  "rubric_items": [
+    { "description": "Correct", "weight": 0 },
+    { "description": "Sign error in $$u$$-substitution", "weight": 1 },
+    { "description": "Missing $$+ C$$", "weight": 0.5 }
+  ],
+  "rubric_item_groups": [
+    {
+      "description": "Convergence justification",
+      "mutually_exclusive": true,
+      "rubric_items": [
+        { "description": "Complete", "weight": 0 },
+        { "description": "Names the test, no hypotheses checked", "weight": 2 },
+        { "description": "No justification", "weight": 4 }
+      ]
+    }
+  ]
+}
