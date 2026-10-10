@@ -10,14 +10,16 @@ Gradescope's rubric endpoints are undocumented. The script sends the same reques
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/).
 2. Create a new script and paste in `gradescope-rubric-import.user.js`.
-3. Open either the grading view (Grade Submissions, then a question) or the assignment's Create Rubric page. A small panel appears at the bottom left.
+3. Open either the grading view (Grade Submissions, then a question) or the assignment's Create Rubric page.
 
 ## Use
 
-- **Import rubric JSON**: choose a file, check the preview, optionally tick "Replace existing rubric", then Import. The file is fully validated before any request is made, and the page reloads when the import finishes.
-- **Export rubric JSON**: downloads the question's rubric in the format below.
+Each rubric's row of buttons (Add Rubric Item, Create Group, Import...) gains two more:
 
-In the grading view both act on the question being graded. On the Create Rubric page, pick the question from the list in the panel first.
+- **Import JSON**: choose a file, check the preview, optionally tick "Replace existing rubric", then Import. The file is fully validated before any request is made, and the page reloads when the import finishes.
+- **Export JSON**: downloads that question's rubric in the format below, including edits made since the page loaded.
+
+On the Create Rubric page every question has its own pair of buttons. The buttons are attached to Gradescope's own markup, so if Gradescope restyles that row they may stop appearing.
 
 ## JSON format
 
@@ -52,7 +54,6 @@ Field names follow Gradescope's own. See `examples/rubric.example.json`.
 ## Caveats
 
 - **Replace deletes rubric items.** If an item has been applied to submissions, deleting it changes those grades.
-- Replace works from the rubric as it was when the page loaded. Reload before importing if you have edited the rubric by hand.
 - Do not replace the pre-loaded Correct/Incorrect items on auto-graded Online Assignment questions; that breaks their auto-grading.
 - Rubric item groups need an Institutional license.
 - If rubric permissions lock editing for your role, the import stops at the first rejected request.

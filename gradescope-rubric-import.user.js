@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gradescope Rubric Import/Export
 // @namespace    https://github.com/nyumathclinic/gradescope-tampermonkey
-// @version      0.4.0
+// @version      0.5.0
 // @description  Import a question's rubric (items, groups, settings) from a JSON file, and export it back out.
 // @author       Matthew Leingang
 // @match        https://www.gradescope.com/courses/*/questions/*/submissions/*/grade
@@ -21,11 +21,8 @@
   const SCORING_TYPES = ['positive', 'negative'];
 
   const courseId = location.pathname.match(/^\/courses\/(\d+)/)[1];
-  // The grading view is for one question; the Create Rubric page shows them
-  // all, and the panel there has a question picker.
+  // The grading view is for one question; the Create Rubric page shows them all.
   const gradePage = location.pathname.match(/\/questions\/(\d+)\/submissions\/\d+\/grade/);
-  let questionSelect = null;
-  const currentQuestionId = () => Number(gradePage ? gradePage[1] : questionSelect?.value);
 
   // ---------------------------------------------------------------------------
   // Endpoints
@@ -169,8 +166,8 @@
   // Reading the current rubric from the page
   // ---------------------------------------------------------------------------
 
-  function pageProps() {
-    return [...document.querySelectorAll('[data-react-props]')].flatMap((el) => {
+  function pageProps(doc = document) {
+    return [...doc.querySelectorAll('[data-react-props]')].flatMap((el) => {
       try {
         return [{ component: el.dataset.reactClass, props: JSON.parse(el.dataset.reactProps) }];
       } catch {
@@ -180,21 +177,27 @@
   }
 
   // The page's main component props and its questions that can have a rubric.
-  function rubricPage() {
-    const props = pageProps().find((p) => ['SubmissionGrader', 'AssignmentRubric'].includes(p.component))?.props;
+  function rubricPage(doc = document) {
+    const props = pageProps(doc).find((p) => ['SubmissionGrader', 'AssignmentRubric'].includes(p.component))?.props;
     if (!props) return null;
     const leaves = (questions) => (questions ?? []).flatMap((q) => (q.children?.length ? leaves(q.children) : [q]));
     return { props, questions: props.question ? [props.question] : leaves(props.questions) };
   }
 
-  const findQuestion = (questionId) => rubricPage()?.questions.find((q) => q.id === questionId);
+  const findQuestion = (questionId, doc = document) => rubricPage(doc)?.questions.find((q) => q.id === questionId);
   const questionLabel = (q) => `${q.full_index}: ${q.title}`;
 
-  // The question's rubric as of page load; edits made since then are not
-  // reflected.
-  function readRubric(questionId) {
-    const { props } = rubricPage() ?? {};
-    const question = findQuestion(questionId);
+  // The page as the server has it now. The props in the live document date
+  // from page load and miss any rubric edits made since.
+  async function freshDocument() {
+    const res = await fetch(location.href, { credentials: 'same-origin', headers: { Accept: 'text/html' } });
+    if (!res.ok) throw new Error(`reloading the page data returned ${res.status}`);
+    return new DOMParser().parseFromString(await res.text(), 'text/html');
+  }
+
+  function readRubric(questionId, doc) {
+    const { props } = rubricPage(doc) ?? {};
+    const question = findQuestion(questionId, doc);
     if (!question || !Array.isArray(props.rubric_items)) return null;
     // The grading view's items carry no question_id; they are all this question's.
     const mine = (entry) => entry.question_id == null || entry.question_id === questionId;
@@ -353,8 +356,8 @@
   // Import
   // ---------------------------------------------------------------------------
 
-  async function runImport(questionId, rubric, existing, log) {
-    const api = apiFor(questionId);
+  async function runImport(question, rubric, existing, log) {
+    const api = apiFor(question.id);
     const step = async (label, req) => {
       const json = await send(req);
       log(`✓ ${label}`);
@@ -364,7 +367,7 @@
     // Settings left out of the file keep the question's current value.
     let settings = null;
     if (Object.keys(rubric.settings).length) {
-      settings = { ...findQuestion(questionId), ...rubric.settings };
+      settings = { ...question, ...rubric.settings };
       const missing = SETTINGS_KEYS.filter((key) => settings[key] == null);
       if (missing.length) throw new Error(`could not read the question's current ${missing.join(', ')} from the page; give all of ${SETTINGS_KEYS.join(', ')} in the file`);
     }
@@ -399,20 +402,23 @@
     URL.revokeObjectURL(a.href);
   }
 
-  function exportRubric() {
-    const questionId = currentQuestionId();
-    const current = readRubric(questionId);
+  async function exportRubric(questionId) {
+    let current;
+    try {
+      current = readRubric(questionId, await freshDocument());
+    } catch (e) {
+      alert(`Could not export the rubric: ${e.message}`);
+      return;
+    }
     if (!current) {
-      alert('Could not find the rubric in this page.');
+      alert('Could not find the rubric in the page data.');
       return;
     }
     const { rubric } = normalize(current);
     download(`rubric-q${questionId}.json`, `${JSON.stringify(serialize(rubric), null, 2)}\n`);
   }
 
-  function openImportDialog() {
-    const questionId = currentQuestionId();
-    const question = findQuestion(questionId);
+  function openImportDialog(question) {
     const dialog = document.createElement('dialog');
     dialog.style.cssText = 'max-width:520px;width:90vw;padding:16px;border:1px solid #999;border-radius:6px;font:14px/1.4 sans-serif';
     dialog.innerHTML = `
@@ -424,7 +430,7 @@
         <button type="button" data-role="cancel">Close</button>
         <button type="button" data-role="import" disabled>Import</button>
       </div>`;
-    dialog.querySelector('h3').textContent = `Import rubric into question ${question ? questionLabel(question) : questionId}`;
+    dialog.querySelector('h3').textContent = `Import rubric into question ${questionLabel(question)}`;
     const fileInput = dialog.querySelector('input[type=file]');
     const status = dialog.querySelector('[data-role=status]');
     const replace = dialog.querySelector('[data-role=replace]');
@@ -460,25 +466,38 @@
     });
 
     importButton.addEventListener('click', async () => {
+      importButton.disabled = true;
+      let current;
       let existing = null;
-      if (replace.checked) {
-        existing = readRubric(questionId);
-        if (!existing) {
-          say('Could not read the existing rubric from the page, so it cannot be replaced.');
-          return;
-        }
-        const count = existing.rubric_items.length;
+      try {
+        const doc = await freshDocument();
+        current = findQuestion(question.id, doc);
+        if (replace.checked) existing = readRubric(question.id, doc);
+      } catch (e) {
+        say(`Could not read the current rubric: ${e.message}`);
+        importButton.disabled = false;
+        return;
+      }
+      if (!current || (replace.checked && !existing)) {
+        say('Could not find this question in the page data, so nothing was imported.');
+        importButton.disabled = false;
+        return;
+      }
+      if (existing) {
         const ok = confirm(
-          `Delete ${count} existing rubric item(s) and ${existing.rubric_item_groups.length} group(s) from this question before importing?\n\n`
+          `Delete ${existing.rubric_items.length} existing rubric item(s) and ${existing.rubric_item_groups.length} group(s) from this question before importing?\n\n`
           + 'If any of them have been applied to submissions, those grades will change. This cannot be undone.',
         );
-        if (!ok) return;
+        if (!ok) {
+          importButton.disabled = false;
+          return;
+        }
       }
-      importButton.disabled = true;
       fileInput.disabled = true;
+      replace.disabled = true;
       say('');
       try {
-        await runImport(questionId, rubric, existing, say);
+        await runImport(current, rubric, existing, say);
       } catch (e) {
         say(`\nStopped: ${e.message}\nEverything marked ✓ above was done; the rest was not. Reload the page to see the current rubric.`);
         return;
@@ -493,39 +512,64 @@
     dialog.showModal();
   }
 
-  function addPanel() {
-    const panel = document.createElement('div');
-    panel.style.cssText = 'position:fixed;left:8px;bottom:56px;z-index:10000;display:flex;gap:4px;padding:4px;background:#fff;border:1px solid #999;border-radius:6px;font:12px sans-serif';
-    const button = (label, onClick, disabledReason = '') => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = label;
-      b.disabled = Boolean(disabledReason);
-      b.title = disabledReason;
-      b.addEventListener('click', onClick);
-      panel.append(b);
-      return b;
-    };
-    const page = rubricPage();
-    if (!gradePage && page?.questions.length) {
-      questionSelect = document.createElement('select');
-      questionSelect.title = 'Question to import into or export from';
-      for (const q of page.questions) questionSelect.add(new Option(questionLabel(q), q.id));
-      panel.append(questionSelect);
-    }
-    const noQuestion = findQuestion(currentQuestionId()) ? '' : 'Could not find the questions on this page.';
-    const locked = page?.props.rubrics_locked ? 'Rubric editing is locked for this assignment.' : '';
-    button('Import rubric JSON', openImportDialog, noQuestion || locked);
-    button('Export rubric JSON', exportRubric, noQuestion);
-    if (DEBUG) {
-      const copy = button('Copy debug log', async () => {
-        await navigator.clipboard.writeText(debugReport());
-        copy.textContent = `Copied (${requestLog.length} requests)`;
-      });
-    }
-    document.body.append(panel);
+  // A button styled like the ones in Gradescope's rubric action row.
+  function jsonButton(label, ariaLabel, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tiiBtn tiiBtn-secondary btnGroup--btn';
+    b.dataset.rubricJson = '';
+    b.setAttribute('aria-label', ariaLabel);
+    b.innerHTML = '<span><i class="fa fa-code" role="img" aria-hidden="true"></i><span></span></span>';
+    b.querySelector('span span').textContent = ` ${label}`;
+    b.addEventListener('click', onClick);
+    return b;
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', addPanel);
-  else addPanel();
+  let loaded = null;
+  const questions = () => (loaded ??= rubricPage())?.questions ?? [];
+
+  // Which question an "Add Rubric Item" button belongs to. On the Create
+  // Rubric page its label ends in the question's number.
+  function questionFor(addItemButton) {
+    if (gradePage) return questions().find((q) => q.id === Number(gradePage[1]));
+    const index = addItemButton.getAttribute('aria-label')?.match(/question (\S+)$/)?.[1];
+    return questions().find((q) => String(q.full_index) === index);
+  }
+
+  // Put Import JSON / Export JSON at the end of each rubric's action row,
+  // after Gradescope's own "Import...".
+  function addButtons() {
+    for (const addItemButton of document.querySelectorAll('.btnGroup [data-px="addRubricItem"]')) {
+      const row = addItemButton.closest('.btnGroup');
+      if (row.querySelector('[data-rubric-json]')) continue;
+      const question = questionFor(addItemButton);
+      if (!question) continue;
+      row.append(
+        jsonButton('Import JSON', `Import rubric JSON into question ${question.full_index}`, () => openImportDialog(question)),
+        jsonButton('Export JSON', `Export rubric JSON from question ${question.full_index}`, () => exportRubric(question.id)),
+      );
+    }
+  }
+
+  function addDebugButton() {
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = 'Copy debug log';
+    copy.style.cssText = 'position:fixed;left:8px;bottom:56px;z-index:10000;font:12px sans-serif';
+    copy.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(debugReport());
+      copy.textContent = `Copied (${requestLog.length} requests)`;
+    });
+    document.body.append(copy);
+  }
+
+  function start() {
+    addButtons();
+    // React re-renders the rows and drops the buttons, so keep them topped up.
+    new MutationObserver(addButtons).observe(document.body, { childList: true, subtree: true });
+    if (DEBUG) addDebugButton();
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
 })();
