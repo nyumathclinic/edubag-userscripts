@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Gradescope Rubric Import/Export
-// @namespace    https://github.com/leingang/gradescope-tampermonkey
+// @namespace    https://github.com/nyumathclinic/gradescope-tampermonkey
 // @version      0.4.0
 // @description  Import a question's rubric (items, groups, settings) from a JSON file, and export it back out.
 // @author       Matthew Leingang
