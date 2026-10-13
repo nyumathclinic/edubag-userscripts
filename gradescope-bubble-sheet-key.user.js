@@ -12,8 +12,8 @@
 (function () {
   'use strict';
 
-  // Same CSV format and page automation as gradescope-bubbler
-  // (https://github.com/nyumathclinic/gradescope-bubbler). The script clicks
+  // Replaces gradescope-bubbler (https://github.com/nyumathclinic/gradescope-bubbler,
+  // archived), keeping its CSV format and page automation. The script clicks
   // the answer-key editor the way a person would and never saves; the user
   // reviews the page and clicks Save.
 
@@ -146,7 +146,7 @@
   // The answer-key editor
   // ---------------------------------------------------------------------------
 
-  // Gradescope's markup, as gradescope-bubbler's filler.py relies on it:
+  // Gradescope's markup, as gradescope-bubbler's filler.py relied on it:
   //   bubble checkbox   #question_{q}_{L}, clicked through label[for=...]
   //   settings button   .fa-gear in the fieldset holding #question_{q}_A
   //   points field      #num-points-q{q}, inside a .jBox-content popup

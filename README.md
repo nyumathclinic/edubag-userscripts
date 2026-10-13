@@ -65,7 +65,7 @@ Field names follow Gradescope's own. See `examples/rubric.example.json`.
 
 ## Bubble Sheet Answer Key
 
-A userscript version of [gradescope-bubbler](https://github.com/nyumathclinic/gradescope-bubbler), which does the same thing from Python. Both read the same CSV files.
+Replaces [gradescope-bubbler](https://github.com/nyumathclinic/gradescope-bubbler), an archived Python app originally by Julius Damarackas. Its CSV files work here unchanged.
 
 ### Use
 
@@ -99,5 +99,5 @@ Question,Answers,Points,Type
 ### Caveats
 
 - Filling several versions switches between them in the version tabs. If the check afterwards finds that an earlier version lost its answers, Gradescope is discarding unsaved changes when you switch: fill in one version at a time, saving after each.
-- The script relies on the editor's markup (the bubble checkboxes' IDs, the gear menu, the points field). If Gradescope changes it, filling stops with a timeout or "not on this page" message and nothing is saved. The markup is listed at the top of the script's "answer-key editor" and "Versions" sections and in gradescope-bubbler's CONTRIBUTING.md.
+- The script relies on the editor's markup (the bubble checkboxes' IDs, the gear menu, the points field). If Gradescope changes it, filling stops with a timeout or "not on this page" message and nothing is saved. The markup is listed at the top of the script's "answer-key editor" and "Versions" sections.
 - **Export** writes `Answers` and, where the page has it, `Points`. It doesn't write `Type`, so re-importing an export leaves scoring types unchanged. Questions with no bubble checked are left out.
