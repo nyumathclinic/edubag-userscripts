@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Gradescope Bubble Sheet Answer Key
 // @namespace    https://github.com/nyumathclinic/gradescope-tampermonkey
-// @version      0.1.0
-// @description  Fill in a bubble sheet assignment's answer key from a CSV file, and export it back out. After gradescope-bubbler by Julius Damarackas.
+// @version      0.2.0
+// @description  Fill in a bubble sheet assignment's answer key (every version) from CSV files, and export it back out. After gradescope-bubbler by Julius Damarackas.
 // @author       Matthew Leingang
-// @match        https://www.gradescope.com/courses/*/assignments/*
+// @match        https://www.gradescope.com/courses/*/assignments/*/bubble_sheet_answer_key/edit
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
@@ -20,6 +20,8 @@
   const LETTERS = 'ABCDE';
   const SEPARATORS = ' ,;';
   const TIMEOUT_MS = 8000;
+  // How long the page must go without DOM changes to count as re-rendered.
+  const SETTLE_MS = 250;
 
   // ---------------------------------------------------------------------------
   // CSV
@@ -233,20 +235,119 @@
     for (const { question: q, letters, points, type } of rows) {
       await setBubbles(q, letters);
       if (points || type) await setSettings(q, points, type);
-      log(`✓ Q${q}: ${letters.join('')}`);
+      log(`  ✓ Q${q}: ${letters.join('')}`);
     }
   }
 
-  // Questions with no bubble checked are left out, since a key row needs an
-  // answer. The scoring type isn't exported: how the page marks the selected
-  // one is unknown.
+  const checkedLetters = (q) => [...LETTERS].filter((letter) => bubble(q, letter)?.checked).join('');
+
+  // Rows whose bubbles on the page differ from the key.
+  const mismatches = (rows) => rows
+    .filter(({ question: q, letters }) => checkedLetters(q) !== letters.join(''))
+    .map(({ question: q, letters }) => `Q${q}: page has ${checkedLetters(q) || 'nothing'}, key has ${letters.join('')}`);
+
+  // ---------------------------------------------------------------------------
+  // Versions
+  // ---------------------------------------------------------------------------
+
+  // A bubble sheet has up to five versions, each a tab in the version
+  // switcher (the "Add Version" button there is not a tab). Every version
+  // uses the same bubble IDs; switching tabs re-renders the editor.
+  function versions() {
+    const tabs = [...document.querySelectorAll('#version-switcher-tablist [role="tab"]')];
+    if (!tabs.length) return [{ name: 'Answer key', tab: null }];
+    return tabs.map((tab) => ({ name: tab.textContent.trim(), tab }));
+  }
+
+  const isSelected = (tab) => !tab || tab.getAttribute('aria-selected') === 'true';
+  const currentVersion = () => versions().find((v) => isSelected(v.tab));
+
+  // Resolves once the page has gone SETTLE_MS without DOM changes (or after
+  // TIMEOUT_MS regardless).
+  function settled() {
+    return new Promise((resolve) => {
+      let timer;
+      const done = () => {
+        observer.disconnect();
+        clearTimeout(timer);
+        clearTimeout(deadline);
+        resolve();
+      };
+      const observer = new MutationObserver(() => {
+        clearTimeout(timer);
+        timer = setTimeout(done, SETTLE_MS);
+      });
+      observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+      timer = setTimeout(done, SETTLE_MS);
+      const deadline = setTimeout(done, TIMEOUT_MS);
+    });
+  }
+
+  async function selectVersion({ name, tab }) {
+    if (!tab) return;
+    // Look the tab up each time: the switcher re-renders its tabs, and a
+    // detached old tab keeps its old aria-selected.
+    const fresh = () => versions().find((v) => v.name === name)?.tab;
+    if (!fresh()) throw new Error(`${name} is no longer on the page`);
+    if (isSelected(fresh())) return;
+    fresh().click();
+    await waitFor(() => isSelected(fresh()), `${name} to open`);
+    await settled();
+  }
+
+  // Fill each version that has a key, then go back and check every one,
+  // in case switching versions discards unsaved changes.
+  async function fillVersions(keys, log) {
+    const start = currentVersion() ?? keys[0].version;
+    const problems = [];
+    for (const { version, rows } of keys) {
+      await selectVersion(version);
+      problems.push(...checkAgainstPage(rows).map((p) => `${version.name}: ${p}`));
+    }
+    if (problems.length) {
+      await selectVersion(start);
+      log(`${problems.length} problem(s), nothing was filled in:`);
+      problems.forEach((p) => log(`  ${p}`));
+      return false;
+    }
+
+    for (const { version, rows } of keys) {
+      await selectVersion(version);
+      log(`${version.name}:`);
+      await fill(rows, log);
+    }
+
+    if (keys.length === 1) return true;
+    log('\nChecking each version...');
+    let ok = true;
+    for (const { version, rows } of keys) {
+      await selectVersion(version);
+      const wrong = mismatches(rows);
+      if (!wrong.length) {
+        log(`  ✓ ${version.name} matches its key`);
+        continue;
+      }
+      ok = false;
+      log(`  ✗ ${version.name} does not match its key:`);
+      wrong.forEach((w) => log(`      ${w}`));
+    }
+    if (!ok) {
+      log('\nSwitching versions seems to discard unsaved changes. Fill in one version at a time, saving after each.');
+    }
+    return ok;
+  }
+
   function exportKey() {
+    // Questions with no bubble checked are left out, since a key row needs
+    // an answer. The scoring type isn't exported: how the page marks the
+    // selected one is unknown.
     const rows = [['Question', 'Answers', 'Points', 'Type']];
     for (const q of pageQuestions()) {
-      const answers = [...LETTERS].filter((letter) => bubble(q, letter)?.checked).join('');
+      const answers = checkedLetters(q);
       if (answers) rows.push([q, answers, pointsField(q)?.value ?? '', '']);
     }
-    download('answer-key.csv', toCsv(rows));
+    const slug = currentVersion().name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    download(`${slug === 'answer-key' ? slug : `answer-key-${slug}`}.csv`, toCsv(rows));
   }
 
   // ---------------------------------------------------------------------------
@@ -262,66 +363,82 @@
   }
 
   function openFillDialog() {
+    const all = versions();
     // In a shadow root so Gradescope's stylesheet does not reach the dialog.
     const host = document.createElement('div');
     host.attachShadow({ mode: 'open' }).innerHTML = `
-      <dialog style="max-width:520px;width:90vw;padding:16px;border:1px solid #999;border-radius:6px;font:14px/1.4 sans-serif">
-        <h3 style="margin:0 0 12px">Fill in the answer key from a CSV</h3>
-        <input type="file" accept=".csv,text/csv">
-        <pre data-role="status" style="white-space:pre-wrap;max-height:260px;overflow:auto;margin:12px 0;font-size:12px"></pre>
+      <dialog style="max-width:560px;width:90vw;padding:16px;border:1px solid #999;border-radius:6px;font:14px/1.4 sans-serif">
+        <h3 style="margin:0 0 12px">Fill in the answer key from CSV</h3>
+        <p style="margin:0 0 8px">Choose a file for each version to fill in. Versions without a file are left alone.</p>
+        <div data-role="files" style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:center"></div>
+        <pre data-role="status" style="white-space:pre-wrap;max-height:300px;overflow:auto;margin:12px 0;font-size:12px"></pre>
         <div style="text-align:right">
           <button type="button" data-role="cancel">Close</button>
           <button type="button" data-role="fill" disabled>Fill</button>
         </div>
       </dialog>`;
     const dialog = host.shadowRoot.querySelector('dialog');
-    const fileInput = dialog.querySelector('input[type=file]');
+    const files = dialog.querySelector('[data-role=files]');
     const status = dialog.querySelector('[data-role=status]');
     const fillButton = dialog.querySelector('[data-role=fill]');
     const say = (line) => {
       status.textContent += `${line}\n`;
       status.scrollTop = status.scrollHeight;
     };
-    let rows = null;
 
-    fileInput.addEventListener('change', async () => {
-      rows = null;
-      fillButton.disabled = true;
-      status.textContent = '';
-      const file = fileInput.files[0];
-      if (!file) return;
-      const result = parseKey(await file.text());
-      const problems = result.errors.length ? result.errors : checkAgainstPage(result.rows);
-      if (problems.length) {
-        say(`${problems.length} problem(s), nothing will be filled in:`);
-        problems.forEach((p) => say(`  ${p}`));
-        return;
-      }
-      rows = result.rows;
-      say(summarize(rows));
-      say('\nBubbles not in the key will be unchecked.');
-      fillButton.disabled = false;
+    // name -> { rows, errors } for each version with a file chosen.
+    const parsed = new Map();
+    const inputs = all.map((version) => {
+      const label = document.createElement('label');
+      label.textContent = version.name;
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.csv,text/csv';
+      input.dataset.version = version.name;
+      input.setAttribute('aria-label', `CSV file for ${version.name}`);
+      files.append(label, input);
+      input.addEventListener('change', async () => {
+        const file = input.files[0];
+        if (file) parsed.set(version.name, parseKey(await file.text()));
+        else parsed.delete(version.name);
+        refresh();
+      });
+      return input;
     });
+
+    function refresh() {
+      status.textContent = '';
+      let valid = parsed.size > 0;
+      for (const { name } of all) {
+        const result = parsed.get(name);
+        if (!result) continue;
+        if (result.errors.length) {
+          valid = false;
+          say(`${name}: ${result.errors.length} problem(s)`);
+          result.errors.forEach((e) => say(`  ${e}`));
+        } else {
+          say(`${name}: ${summarize(result.rows).replace(/\n/g, '\n  ')}`);
+        }
+      }
+      if (parsed.size && !valid) say('\nNothing will be filled in until every chosen file is fixed.');
+      if (valid) say('\nBubbles not in a key will be unchecked.');
+      fillButton.disabled = !valid;
+    }
 
     fillButton.addEventListener('click', async () => {
       fillButton.disabled = true;
-      fileInput.disabled = true;
-      // The page may have changed since the file was chosen.
-      const problems = checkAgainstPage(rows);
-      if (problems.length) {
-        say(`\n${problems.length} problem(s), nothing was filled in:`);
-        problems.forEach((p) => say(`  ${p}`));
-        fileInput.disabled = false;
-        return;
-      }
+      inputs.forEach((input) => { input.disabled = true; });
+      const keys = all.filter((v) => parsed.has(v.name)).map((version) => ({ version, rows: parsed.get(version.name).rows }));
       say('');
+      let ok;
       try {
-        await fill(rows, say);
+        ok = await fillVersions(keys, say);
       } catch (e) {
         say(`\nStopped: ${e.message}\nQuestions marked ✓ above were filled in; the rest were not. Nothing has been saved.`);
         return;
       }
-      say('\nDone. Review the answers, then click Save.');
+      if (ok) say('\nDone. Review each version, then click Save Answer Key.');
+      else inputs.forEach((input) => { input.disabled = false; });
     });
 
     dialog.querySelector('[data-role=cancel]').addEventListener('click', () => dialog.close());
@@ -330,31 +447,30 @@
     dialog.showModal();
   }
 
-  // A button styled like Gradescope's secondary buttons.
-  function button(label, icon, onClick) {
+  // An action-bar button, styled like Gradescope's own.
+  function actionButton(label, icon, onClick) {
+    const li = document.createElement('li');
+    li.dataset.bubbleSheetKey = '';
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'tiiBtn tiiBtn-secondary';
+    b.className = 'tiiBtn tiiBtn-secondary actionBar--action';
     b.innerHTML = `<span><i class="fa ${icon}" role="img" aria-hidden="true"></i><span></span></span>`;
     b.querySelector('span span').textContent = ` ${label}`;
     b.addEventListener('click', onClick);
-    return b;
+    li.append(b);
+    return li;
   }
 
-  // The editor's toolbar markup is unknown, so the buttons float bottom-right.
+  // Put Fill from CSV / Export CSV in the action bar, before Save Answer Key.
   function addButtons() {
-    if (document.querySelector('[data-bubble-sheet-key]') || !pageQuestions().length) return;
-    const bar = document.createElement('div');
-    bar.dataset.bubbleSheetKey = '';
-    bar.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:10000;display:flex;gap:8px';
-    bar.append(
-      button('Fill from CSV', 'fa-upload', openFillDialog),
-      button('Export CSV', 'fa-download', exportKey),
-    );
-    document.body.append(bar);
+    const list = document.querySelector('#actionBar .actionBar--actionList');
+    if (!list || list.querySelector('[data-bubble-sheet-key]')) return;
+    const save = list.querySelector('.tiiBtn-primary')?.closest('li') ?? null;
+    list.insertBefore(actionButton('Fill from CSV', 'fa-upload', openFillDialog), save);
+    list.insertBefore(actionButton('Export CSV', 'fa-download', exportKey), save);
   }
 
   addButtons();
-  // The editor may render after the page loads.
+  // The action bar may render, or re-render, after the page loads.
   new MutationObserver(addButtons).observe(document.body, { childList: true, subtree: true });
 })();

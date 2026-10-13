@@ -69,12 +69,12 @@ A userscript version of [gradescope-bubbler](https://github.com/nyumathclinic/gr
 
 ### Use
 
-Open a bubble sheet assignment's answer-key editor. Two buttons appear in the bottom-right corner:
+Open a bubble sheet assignment's answer-key editor (Edit Answer Key; the URL ends in `bubble_sheet_answer_key/edit`). The action bar gains two buttons before **Save Answer Key**:
 
-- **Fill from CSV**: choose a file and check the preview, then click Fill. The whole file, and whether every question and bubble it names is on the page, is checked before anything is clicked. Bubbles not in the key are unchecked.
-- **Export CSV**: downloads the bubbles currently checked on the page, in the format below.
+- **Fill from CSV**: choose a CSV file for each version you want to fill in (up to five; versions without a file are left alone), check the preview, then click Fill. Every file, and whether every question and bubble it names is on that version's page, is checked before anything is clicked. Bubbles not in a key are unchecked. With more than one version, the script then switches back through each one and checks that its bubbles still match its key.
+- **Export CSV**: downloads the version currently shown, as `answer-key-version-a.csv` and so on, in the format below.
 
-The script clicks the editor the way you would and **never saves**. When it finishes, review the answers and click Save. Leaving the page without saving discards the changes.
+The script clicks the editor the way you would and **never saves**. When it finishes, review each version and click Save Answer Key. Leaving the page without saving discards the changes.
 
 ### CSV format
 
@@ -98,6 +98,6 @@ Question,Answers,Points,Type
 
 ### Caveats
 
-- The buttons appear on any assignment page that has answer-key bubbles. They float in the corner because they aren't attached to Gradescope's toolbar.
-- The script relies on the editor's markup (the bubble checkboxes' IDs, the gear menu, the points field). If Gradescope changes it, filling stops with a timeout or "not on this page" message and nothing is saved. The markup is listed at the top of the script's "answer-key editor" section and in gradescope-bubbler's CONTRIBUTING.md.
+- Filling several versions switches between them in the version tabs. If the check afterwards finds that an earlier version lost its answers, Gradescope is discarding unsaved changes when you switch: fill in one version at a time, saving after each.
+- The script relies on the editor's markup (the bubble checkboxes' IDs, the gear menu, the points field). If Gradescope changes it, filling stops with a timeout or "not on this page" message and nothing is saved. The markup is listed at the top of the script's "answer-key editor" and "Versions" sections and in gradescope-bubbler's CONTRIBUTING.md.
 - **Export** writes `Answers` and, where the page has it, `Points`. It doesn't write `Type`, so re-importing an export leaves scoring types unchanged. Questions with no bubble checked are left out.
