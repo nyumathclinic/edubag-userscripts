@@ -2,7 +2,7 @@
 
 Tampermonkey userscripts for Gradescope:
 
-- [**Rubric Import/Export**](#rubric-importexport) (`gradescope-rubric-import.user.js`): import a question's rubric from a JSON file, and export it back out.
+- [**Rubric Import/Export**](#rubric-importexport) (`gradescope-rubric-import.user.js`): import a question's rubric, or every rubric in an assignment, from a JSON file, and export it back out.
 - [**Bubble Sheet Answer Key**](#bubble-sheet-answer-key) (`gradescope-bubble-sheet-key.user.js`): fill in a bubble sheet assignment's answer key from a CSV file, and export it back out.
 
 ## Install
@@ -23,7 +23,12 @@ Open either the grading view (Grade Submissions, then a question) or the assignm
 - **Import JSON**: choose a file, check the preview, optionally tick "Replace existing rubric", then Import. The file is fully validated before any request is made, and the page reloads when the import finishes.
 - **Export JSON**: downloads that question's rubric in the format below, including edits made since the page loaded.
 
-On the Create Rubric page every question has its own pair of buttons. The buttons are attached to Gradescope's own markup, so if Gradescope restyles that row they may stop appearing.
+On the Create Rubric page every question has its own pair of buttons, and the action bar at the bottom gains two more, before **Manage Scans**, for the whole assignment:
+
+- **Import All JSON**: like Import JSON, but takes an [assignment file](#assignment-file) and imports into every question it names. The preview lists each question's rubric, the questions the file leaves alone, and any title that differs from the assignment's. "Replace existing rubric" applies to every question in the file, and you confirm the total number of deletions once.
+- **Export All JSON**: downloads every question's rubric as one assignment file.
+
+The buttons are attached to Gradescope's own markup, so if Gradescope restyles those rows they may stop appearing.
 
 ### JSON format
 
@@ -54,6 +59,24 @@ Field names follow Gradescope's own. See `examples/rubric.example.json`.
 - `mutually_exclusive: true` is Gradescope's "select one" style. Groups cannot be nested, and each needs at least one item.
 - Ungrouped items are created first, then groups, each in file order. To interleave them, give every ungrouped item and every group a numeric `position`; they are then created in that order. Exports of a rubric with both include `position`.
 - Gradescope's flat form is accepted too: top-level items with a `group_id` matching a group's `id`.
+
+### Assignment file
+
+A list of rubrics in the format above, each with the number of the question it belongs to. See `examples/rubric-assignment.example.json`.
+
+```json
+{
+  "questions": [
+    { "question": "1", "title": "Integration by substitution", "rubric_items": [ ... ] },
+    { "question": "2.1", "title": "Series convergence", "rubric_items": [ ... ], "rubric_item_groups": [ ... ] }
+  ]
+}
+```
+
+- `question` is the question's number as Gradescope shows it (`"1"`, `"2.1"`), so a file exported from one assignment can be imported into another with the same numbering. Every number must exist in the assignment, and each may appear once.
+- `title` is optional and only checked: if it differs from the question's title, the preview warns, but the import goes ahead.
+- Questions not in the file are left alone.
+- The whole file is validated before any request is made. If an import fails partway, it stops at that question; earlier questions are already done.
 
 ### Caveats
 

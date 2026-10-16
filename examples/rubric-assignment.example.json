@@ -1,0 +1,35 @@
+{
+  "questions": [
+    {
+      "question": "1",
+      "title": "Integration by substitution",
+      "scoring_type": "negative",
+      "floor": true,
+      "ceiling": true,
+      "rubric_items": [
+        { "description": "Correct", "weight": 0 },
+        { "description": "Sign error in $$u$$-substitution", "weight": 1 },
+        { "description": "Missing $$+ C$$", "weight": 0.5 }
+      ]
+    },
+    {
+      "question": "2.1",
+      "title": "Series convergence",
+      "scoring_type": "positive",
+      "rubric_items": [
+        { "description": "Correct conclusion", "weight": 2 }
+      ],
+      "rubric_item_groups": [
+        {
+          "description": "Convergence justification",
+          "mutually_exclusive": true,
+          "rubric_items": [
+            { "description": "Complete", "weight": 4 },
+            { "description": "Names the test, no hypotheses checked", "weight": 2 },
+            { "description": "No justification", "weight": 0 }
+          ]
+        }
+      ]
+    }
+  ]
+}

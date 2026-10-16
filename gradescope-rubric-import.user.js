@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gradescope Rubric Import/Export
 // @namespace    https://github.com/nyumathclinic/gradescope-tampermonkey
-// @version      0.5.1
-// @description  Import a question's rubric (items, groups, settings) from a JSON file, and export it back out.
+// @version      0.6.0
+// @description  Import a question's or a whole assignment's rubric (items, groups, settings) from a JSON file, and export it back out.
 // @author       Matthew Leingang
 // @match        https://www.gradescope.com/courses/*/questions/*/submissions/*/grade
 // @match        https://www.gradescope.com/courses/*/assignments/*/rubric/edit
@@ -23,6 +23,7 @@
   const courseId = location.pathname.match(/^\/courses\/(\d+)/)[1];
   // The grading view is for one question; the Create Rubric page shows them all.
   const gradePage = location.pathname.match(/\/questions\/(\d+)\/submissions\/\d+\/grade/);
+  const assignmentId = location.pathname.match(/\/assignments\/(\d+)\/rubric\/edit/)?.[1];
 
   // ---------------------------------------------------------------------------
   // Endpoints
@@ -352,6 +353,54 @@
     return lines.join('\n');
   }
 
+  // An assignment file is { questions: [{ question: "2.3", title, ...rubric }] },
+  // each entry matched to the question with that number. Returns
+  // { entries: [{ question, rubric }], errors, warnings }.
+  function normalizeAssignment(data, questions) {
+    const errors = [];
+    const warnings = [];
+    const entries = [];
+    if (data === null || typeof data !== 'object' || !Array.isArray(data.questions)) {
+      return { entries, errors: ['top level: expected an object with a "questions" array'], warnings };
+    }
+    const seen = new Set();
+    data.questions.forEach((raw, i) => {
+      const path = `questions[${i}]`;
+      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+        errors.push(`${path}: expected an object`);
+        return;
+      }
+      if (typeof raw.question !== 'string' && typeof raw.question !== 'number') {
+        errors.push(`${path}.question: expected a question number, e.g. "2.3"`);
+        return;
+      }
+      const index = String(raw.question);
+      const question = questions.find((q) => String(q.full_index) === index);
+      if (!question) {
+        errors.push(`${path}: this assignment has no question ${index} with a rubric`);
+        return;
+      }
+      if (seen.has(index)) errors.push(`${path}: question ${index} appears more than once`);
+      seen.add(index);
+      if (typeof raw.title === 'string' && raw.title.trim() !== String(question.title ?? '').trim()) {
+        warnings.push(`question ${index} is titled "${question.title}" here, "${raw.title}" in the file`);
+      }
+      const result = normalize(raw);
+      result.errors.forEach((e) => errors.push(`question ${index}: ${e}`));
+      entries.push({ question, rubric: result.rubric });
+    });
+    if (!data.questions.length) errors.push('questions: the file has no questions');
+    return { entries, errors, warnings };
+  }
+
+  const serializeAssignment = (questions, doc) => ({
+    questions: questions.map((q) => ({
+      question: String(q.full_index),
+      title: q.title,
+      ...serialize(normalize(readRubric(q.id, doc)).rubric),
+    })),
+  });
+
   // ---------------------------------------------------------------------------
   // Import
   // ---------------------------------------------------------------------------
@@ -418,7 +467,27 @@
     download(`rubric-q${questionId}.json`, `${JSON.stringify(serialize(rubric), null, 2)}\n`);
   }
 
-  function openImportDialog(question) {
+  async function exportAssignment() {
+    let doc;
+    try {
+      doc = await freshDocument();
+    } catch (e) {
+      alert(`Could not export the rubrics: ${e.message}`);
+      return;
+    }
+    const all = rubricPage(doc)?.questions ?? [];
+    if (!all.length || all.some((q) => !readRubric(q.id, doc))) {
+      alert('Could not find the rubrics in the page data.');
+      return;
+    }
+    download(`rubric-assignment-${assignmentId}.json`, `${JSON.stringify(serializeAssignment(all, doc), null, 2)}\n`);
+  }
+
+  // The import dialog: choose a file, preview it, optionally replace, import.
+  // parse(data) returns { plan, errors, preview }, where preview is the text
+  // shown for a valid file. run(plan, replace, say) does the import and
+  // returns false if it was cancelled before anything was sent.
+  function importDialog({ title, parse, run }) {
     // In a shadow root so Gradescope's stylesheet, which hides native
     // checkboxes, does not reach the dialog's controls.
     const host = document.createElement('div');
@@ -434,7 +503,7 @@
         </div>
       </dialog>`;
     const dialog = host.shadowRoot.querySelector('dialog');
-    dialog.querySelector('h3').textContent = `Import rubric into question ${questionLabel(question)}`;
+    dialog.querySelector('h3').textContent = title;
     const fileInput = dialog.querySelector('input[type=file]');
     const status = dialog.querySelector('[data-role=status]');
     const replace = dialog.querySelector('[data-role=replace]');
@@ -443,10 +512,10 @@
       status.textContent += `${line}\n`;
       status.scrollTop = status.scrollHeight;
     };
-    let rubric = null;
+    let plan = null;
 
     fileInput.addEventListener('change', async () => {
-      rubric = null;
+      plan = null;
       importButton.disabled = true;
       status.textContent = '';
       const file = fileInput.files[0];
@@ -458,52 +527,32 @@
         say(`Not valid JSON: ${e.message}`);
         return;
       }
-      const result = normalize(data);
+      const result = parse(data);
       if (result.errors.length) {
         say(`${result.errors.length} problem(s), nothing will be imported:`);
         result.errors.forEach((e) => say(`  ${e}`));
         return;
       }
-      rubric = result.rubric;
-      say(summarize(rubric));
+      plan = result.plan;
+      say(result.preview);
       importButton.disabled = false;
     });
 
     importButton.addEventListener('click', async () => {
       importButton.disabled = true;
-      let current;
-      let existing = null;
-      try {
-        const doc = await freshDocument();
-        current = findQuestion(question.id, doc);
-        if (replace.checked) existing = readRubric(question.id, doc);
-      } catch (e) {
-        say(`Could not read the current rubric: ${e.message}`);
-        importButton.disabled = false;
-        return;
-      }
-      if (!current || (replace.checked && !existing)) {
-        say('Could not find this question in the page data, so nothing was imported.');
-        importButton.disabled = false;
-        return;
-      }
-      if (existing) {
-        const ok = confirm(
-          `Delete ${existing.rubric_items.length} existing rubric item(s) and ${existing.rubric_item_groups.length} group(s) from this question before importing?\n\n`
-          + 'If any of them have been applied to submissions, those grades will change. This cannot be undone.',
-        );
-        if (!ok) {
-          importButton.disabled = false;
-          return;
-        }
-      }
       fileInput.disabled = true;
       replace.disabled = true;
-      say('');
+      let started;
       try {
-        await runImport(current, rubric, existing, say);
+        started = await run(plan, replace.checked, say);
       } catch (e) {
         say(`\nStopped: ${e.message}\nEverything marked ✓ above was done; the rest was not. Reload the page to see the current rubric.`);
+        return;
+      }
+      if (started === false) {
+        importButton.disabled = false;
+        fileInput.disabled = false;
+        replace.disabled = false;
         return;
       }
       say('\nDone. Reloading…');
@@ -514,6 +563,82 @@
     dialog.addEventListener('close', () => host.remove());
     document.body.append(host);
     dialog.showModal();
+  }
+
+  // The questions as the server has them now and, when replacing, their
+  // current rubrics. Returns null (after saying why) if any is missing.
+  async function currentState(questionIds, replace, say) {
+    let doc;
+    try {
+      doc = await freshDocument();
+    } catch (e) {
+      say(`Could not read the current rubric: ${e.message}`);
+      return null;
+    }
+    const state = questionIds.map((id) => ({
+      question: findQuestion(id, doc),
+      existing: replace ? readRubric(id, doc) : null,
+    }));
+    if (state.some((s) => !s.question || (replace && !s.existing))) {
+      say('Could not find every question in the page data, so nothing was imported.');
+      return null;
+    }
+    return state;
+  }
+
+  const deleteWarning = 'If any of them have been applied to submissions, those grades will change. This cannot be undone.';
+
+  function openImportDialog(question) {
+    importDialog({
+      title: `Import rubric into question ${questionLabel(question)}`,
+      parse: (data) => {
+        const { rubric, errors } = normalize(data);
+        if (Array.isArray(data?.questions)) errors.unshift('this is an assignment file; use Import All JSON in the action bar');
+        return { plan: rubric, errors, preview: summarize(rubric) };
+      },
+      run: async (rubric, replace, say) => {
+        const state = await currentState([question.id], replace, say);
+        if (!state) return false;
+        const [{ question: current, existing }] = state;
+        if (existing && !confirm(
+          `Delete ${existing.rubric_items.length} existing rubric item(s) and ${existing.rubric_item_groups.length} group(s) from this question before importing?\n\n${deleteWarning}`,
+        )) return false;
+        say('');
+        await runImport(current, rubric, existing, say);
+        return true;
+      },
+    });
+  }
+
+  function openAssignmentImportDialog() {
+    const all = questions();
+    importDialog({
+      title: 'Import rubrics into this assignment',
+      parse: (data) => {
+        const { entries, errors, warnings } = normalizeAssignment(data, all);
+        const lines = entries.map(({ question, rubric }) => `${questionLabel(question)}\n${summarize(rubric).replace(/^/gm, '  ')}`);
+        const left = all.filter((q) => !entries.some((e) => e.question === q));
+        if (left.length) lines.push(`Left unchanged: ${left.map((q) => q.full_index).join(', ')}`);
+        if (warnings.length) lines.push('Warnings:', ...warnings.map((w) => `  ${w}`));
+        return { plan: entries, errors, preview: lines.join('\n') };
+      },
+      run: async (entries, replace, say) => {
+        const state = await currentState(entries.map((e) => e.question.id), replace, say);
+        if (!state) return false;
+        if (replace) {
+          const count = (key) => state.reduce((n, s) => n + s.existing[key].length, 0);
+          if (!confirm(
+            `Delete ${count('rubric_items')} existing rubric item(s) and ${count('rubric_item_groups')} group(s) across ${entries.length} question(s) before importing?\n\n${deleteWarning}`,
+          )) return false;
+        }
+        for (const [i, { rubric }] of entries.entries()) {
+          const { question: current, existing } = state[i];
+          say(`\n— Question ${questionLabel(current)}`);
+          await runImport(current, rubric, existing, say);
+        }
+        return true;
+      },
+    });
   }
 
   // A button styled like the ones in Gradescope's rubric action row.
@@ -553,6 +678,31 @@
         jsonButton('Export JSON', `Export rubric JSON from question ${question.full_index}`, () => exportRubric(question.id)),
       );
     }
+    if (!gradePage) addAssignmentButtons();
+  }
+
+  // An action-bar button, styled like Gradescope's own.
+  function actionButton(label, icon, onClick) {
+    const li = document.createElement('li');
+    li.dataset.rubricJsonAll = '';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tiiBtn tiiBtn-secondary actionBar--action';
+    b.innerHTML = `<span><i class="fa ${icon}" role="img" aria-hidden="true"></i><span></span></span>`;
+    b.querySelector('span span').textContent = ` ${label}`;
+    b.addEventListener('click', onClick);
+    li.append(b);
+    return li;
+  }
+
+  // On the Create Rubric page, put Import All JSON / Export All JSON in the
+  // action bar, before Manage Scans.
+  function addAssignmentButtons() {
+    const list = document.querySelector('#actionBar .actionBar--actionList');
+    if (!list || list.querySelector('[data-rubric-json-all]') || !questions().length) return;
+    const next = list.querySelector('.tiiBtn-primary')?.closest('li') ?? null;
+    list.insertBefore(actionButton('Import All JSON', 'fa-upload', openAssignmentImportDialog), next);
+    list.insertBefore(actionButton('Export All JSON', 'fa-download', exportAssignment), next);
   }
 
   function addDebugButton() {
