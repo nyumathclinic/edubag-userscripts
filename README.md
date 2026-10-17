@@ -16,4 +16,4 @@ Tampermonkey userscripts for the web tools a course runs on. *edubag* is short f
 
 ### [Brightspace](brightspace/README.md)
 
-None yet.
+- [**Enter Grades Helpers**](brightspace/README.md#enter-grades-helpers) (`brightspace/enter-grades.user.js`): on a grade item's Enter Grades page, set blank grades to zero with a comment, and give kudos to students at full marks.
