@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Gradescope Bubble Sheet Answer Key
 // @namespace    https://github.com/nyumathclinic/edubag-userscripts
-// @version      0.2.1
+// @version      0.2.2
 // @description  Fill in a bubble sheet assignment's answer key (every version) from CSV files, and export it back out. After gradescope-bubbler by Julius Damarackas.
 // @author       Matthew Leingang
 // @match        https://www.gradescope.com/courses/*/assignments/*/bubble_sheet_answer_key/edit
+// @match        https://www.gradescope.com/courses/*/assignment_containers/*/bubble_sheet_answer_key/edit
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
