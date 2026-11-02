@@ -17,3 +17,7 @@ Tampermonkey userscripts for the web tools a course runs on. *edubag* is short f
 ### [Brightspace](brightspace/README.md)
 
 - [**Enter Grades Helpers**](brightspace/README.md#enter-grades-helpers) (`brightspace/enter-grades.user.js`): on a grade item's Enter Grades page, set blank grades to zero with a comment, and give kudos to students at full marks.
+
+### [Starfish](starfish/README.md)
+
+- [**Progress Survey Filler**](starfish/README.md#progress-survey-filler) (`starfish/progress-survey.user.js`): fill in a progress survey (each student's progress checkbox and comment) from a CSV file keyed by username.
